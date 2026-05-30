@@ -1,0 +1,240 @@
+
+<style>
+  .game-wrap { display: flex; flex-direction: column; align-items: center; padding: 1rem 0; gap: 12px; }
+  #gameCanvas { border-radius: var(--border-radius-lg); border: 1.5px solid var(--color-border-secondary); display: block; cursor: none; }
+  .hud { display: flex; gap: 16px; font-size: 14px; color: var(--color-text-secondary); align-items: center; }
+  .hud-val { font-weight: 500; color: var(--color-text-primary); }
+  .btn { font-size: 14px; padding: 8px 20px; border-radius: var(--border-radius-md); border: 0.5px solid var(--color-border-secondary); background: transparent; color: var(--color-text-primary); cursor: pointer; }
+  .btn:hover { background: var(--color-background-secondary); }
+  .tip { font-size: 13px; color: var(--color-text-tertiary); }
+</style>
+<div class="game-wrap">
+  <h2 class="sr-only">Eco Planter — catch falling saplings with your basket</h2>
+  <div class="hud">
+    <span>Trees planted: <span class="hud-val" id="scoreDisplay">0</span></span>
+    <span>Missed: <span class="hud-val" id="livesDisplay">❤️❤️❤️</span></span>
+    <span>Level: <span class="hud-val" id="levelDisplay">1</span></span>
+    <button class="btn" id="restartBtn" style="display:none;">Play again</button>
+  </div>
+  <canvas id="gameCanvas" width="600" height="420"></canvas>
+  <p class="tip">Arrow keys or tap &amp; drag to move the basket</p>
+</div>
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('scoreDisplay');
+const livesEl = document.getElementById('livesDisplay');
+const levelEl = document.getElementById('levelDisplay');
+const restartBtn = document.getElementById('restartBtn');
+
+const HEARTS = ['❤️❤️❤️','❤️❤️','❤️','💀'];
+
+let score, frame, saplings, particles, missed, gameOver, level, frameCount;
+let player = { x: 275, y: 375, width: 60, height: 28, speed: 7, dx: 0 };
+const keys = {};
+
+function init() {
+  score = 0; frame = 0; frameCount = 0;
+  saplings = []; particles = []; missed = 0;
+  gameOver = false; level = 1;
+  player.x = 270; player.dx = 0;
+  scoreEl.textContent = '0';
+  levelEl.textContent = '1';
+  livesEl.textContent = HEARTS[0];
+  restartBtn.style.display = 'none';
+  loop();
+}
+
+function spawnParticles(x, y) {
+  const colors = ['#4caf50','#81c784','#a5d6a7','#ffeb3b'];
+  for (let i = 0; i < 10; i++) {
+    particles.push({
+      x, y,
+      vx: (Math.random() - 0.5) * 4,
+      vy: -(Math.random() * 3 + 1),
+      alpha: 1,
+      color: colors[Math.floor(Math.random() * colors.length)],
+      r: Math.random() * 4 + 2
+    });
+  }
+}
+
+function drawBackground() {
+  const isDark = getComputedStyle(document.documentElement).getPropertyValue('--color-background-primary').trim().startsWith('#0') ||
+    window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const skyTop = isDark ? '#1a2e1a' : '#c8e6c9';
+  const skyBot = isDark ? '#2e4a2e' : '#a5d6a7';
+  const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  grad.addColorStop(0, skyTop);
+  grad.addColorStop(1, skyBot);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  ctx.fillStyle = isDark ? '#1b3a1b' : '#388e3c';
+  ctx.fillRect(0, canvas.height - 50, canvas.width, 50);
+  ctx.fillStyle = isDark ? '#2e5f2e' : '#43a047';
+  ctx.fillRect(0, canvas.height - 52, canvas.width, 8);
+
+  for (let i = 0; i < 5; i++) {
+    const cx2 = 60 + i * 120, cy2 = 30;
+    ctx.fillStyle = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.5)';
+    ctx.beginPath();
+    ctx.ellipse(cx2, cy2, 40, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx2 + 20, cy2 - 8, 30, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawPlayer() {
+  const px = player.x, py = player.y, pw = player.width, ph = player.height;
+  ctx.fillStyle = '#5d4037';
+  ctx.beginPath();
+  ctx.moveTo(px - 4, py);
+  ctx.lineTo(px + pw + 4, py);
+  ctx.lineTo(px + pw - 4, py + ph);
+  ctx.lineTo(px + 4, py + ph);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#795548';
+  ctx.fillRect(px - 2, py, pw + 4, 8);
+  ctx.strokeStyle = '#4e342e';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  ctx.fillStyle = '#4caf50';
+  ctx.fillRect(px + 2, py + 2, pw - 4, 5);
+}
+
+function drawSaplings() {
+  saplings.forEach(s => {
+    ctx.save();
+    ctx.translate(s.x + s.width / 2, s.y + s.height);
+    ctx.fillStyle = '#5d4037';
+    ctx.fillRect(-2, 0, 4, 8);
+    const layers = [
+      { w: 18, h: 14, y: -s.height },
+      { w: 14, h: 12, y: -s.height + 8 },
+      { w: 10, h: 10, y: -s.height + 16 }
+    ];
+    layers.forEach((l, i) => {
+      ctx.fillStyle = i === 0 ? '#2e7d32' : i === 1 ? '#388e3c' : '#43a047';
+      ctx.beginPath();
+      ctx.moveTo(0, l.y - l.h);
+      ctx.lineTo(l.w / 2, l.y);
+      ctx.lineTo(-l.w / 2, l.y);
+      ctx.closePath();
+      ctx.fill();
+    });
+    ctx.restore();
+  });
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    ctx.globalAlpha = p.alpha;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.globalAlpha = 1;
+}
+
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 32px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('Game Over!', canvas.width / 2, 170);
+  ctx.font = '18px sans-serif';
+  ctx.fillText(`You planted ${score} tree${score !== 1 ? 's' : ''}`, canvas.width / 2, 210);
+  ctx.font = '14px sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  const msg = score >= 20 ? 'Forest champion!' : score >= 10 ? 'Budding arborist!' : 'Keep planting!';
+  ctx.fillText(msg, canvas.width / 2, 240);
+  ctx.textAlign = 'left';
+}
+
+function update() {
+  if (gameOver) return;
+  frameCount++;
+  level = 1 + Math.floor(score / 8);
+  levelEl.textContent = level;
+
+  player.x += player.dx;
+  if (player.x < 0) player.x = 0;
+  if (player.x + player.width > canvas.width) player.x = canvas.width - player.width;
+
+  const spawnRate = Math.max(20, 55 - level * 4);
+  if (frameCount % spawnRate === 0) {
+    saplings.push({
+      x: Math.random() * (canvas.width - 24),
+      y: -36, width: 20, height: 30,
+      speed: Math.random() * 1.5 + 1.5 + level * 0.3
+    });
+  }
+
+  for (let i = saplings.length - 1; i >= 0; i--) {
+    saplings[i].y += saplings[i].speed;
+    const s = saplings[i];
+    if (s.x < player.x + player.width && s.x + s.width > player.x &&
+        s.y + s.height > player.y && s.y < player.y + player.height) {
+      spawnParticles(s.x + s.width / 2, player.y);
+      score++;
+      scoreEl.textContent = score;
+      saplings.splice(i, 1);
+    } else if (s.y > canvas.height) {
+      saplings.splice(i, 1);
+      missed++;
+      livesEl.textContent = HEARTS[Math.min(missed, 3)];
+      if (missed >= 3) {
+        gameOver = true;
+        restartBtn.style.display = 'inline-block';
+      }
+    }
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.15; p.alpha -= 0.05;
+    if (p.alpha <= 0) particles.splice(i, 1);
+  }
+}
+
+let animId;
+function loop() {
+  if (animId) cancelAnimationFrame(animId);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  drawBackground();
+  drawPlayer();
+  drawSaplings();
+  drawParticles();
+  update();
+  if (gameOver) drawGameOver();
+  if (!gameOver) animId = requestAnimationFrame(loop);
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight') player.dx = player.speed;
+  else if (e.key === 'ArrowLeft') player.dx = -player.speed;
+});
+document.addEventListener('keyup', e => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') player.dx = 0;
+});
+
+let touchStartX = null;
+canvas.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; e.preventDefault(); }, {passive:false});
+canvas.addEventListener('touchmove', e => {
+  if (touchStartX === null) return;
+  const dx = e.touches[0].clientX - touchStartX;
+  player.x = Math.max(0, Math.min(canvas.width - player.width, player.x + dx * 0.8));
+  touchStartX = e.touches[0].clientX;
+  e.preventDefault();
+}, {passive:false});
+canvas.addEventListener('touchend', () => { touchStartX = null; });
+
+restartBtn.addEventListener('click', () => { if (animId) cancelAnimationFrame(animId); init(); });
+init();
+</script>
